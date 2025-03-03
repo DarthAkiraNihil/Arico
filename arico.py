@@ -1,6 +1,8 @@
+import argparse
 import sys
 from fractions import Fraction
 from decimal import Decimal
+from mpmath import mp, mpf
 from typing import List
 
 
@@ -9,6 +11,27 @@ class Arico:
         self._file = file
         self._data: List[int] = list()
         self._length = 0
+
+    @staticmethod
+    def _frac_to_float(fraction: Fraction, accuracy: int) -> str:
+        num, denom = fraction.numerator, fraction.denominator
+        denom_power = len(str(denom))
+        result = str(num // denom) + '.'
+
+        mod = num % denom
+        for _ in range(accuracy):
+            if mod == 0:
+                break
+            mod_power = len(str(mod))
+            diff = denom_power - mod_power
+            mod *= 10 ** diff
+            if mod < denom:
+                mod *= 10
+
+            result += str(mod // denom)
+            mod %= denom
+
+        return result
 
     @staticmethod
     def _int_to_bytes(value: int, desired_length: int = None):
@@ -32,7 +55,6 @@ class Arico:
 
         length_of_length = (self._length.bit_length() + 7) // 8
         length_of_table = len(counts.keys())
-        print(f"LOT: {length_of_table}")
 
         length = list(self._int_to_bytes(self._length))
         length_checkpoint = 0x2e
@@ -43,6 +65,7 @@ class Arico:
 
         counts_checkpoint = 0x2e
 
+        # decimal_result = str(mpf(mpf(encode_result.numerator) / mpf(encode_result.denominator)))
         decimal_result = "{0:f}".format(Decimal(encode_result.numerator) / Decimal(encode_result.denominator))
         _solid, _partial = decimal_result.split('.')[0], decimal_result.split('.')[1]
 
@@ -144,6 +167,8 @@ class Arico:
             while byte := self._next_byte(self._file):
                 code.append(byte)
             code = int.from_bytes(code, "big", signed=False)
+            # power = len(str(code))
+            # code = Fraction(code, 10**power)
             code = Fraction(Decimal(f'0.{code}'))
         else:
             raise Exception("Invalid format")
@@ -176,25 +201,57 @@ class Arico:
                     break
 
         return decoded
+
+sys.set_int_max_str_digits(2**31 - 1)
+
 if __name__ == '__main__':
-    sys.set_int_max_str_digits(2**16-1)
 
-    with open('test_input.txt', 'rb') as fin:
-        arico = Arico(fin)
-        fact, encoded = arico.encode()
+    mp.dps = 10**3
 
-        dec ="{0:1024f}".format(Decimal(Decimal(fact.numerator) / Decimal(fact.denominator)))
-        print(f"Decimal encoded result: {dec}")
+    parser = argparse.ArgumentParser(
+        prog='arico',
+        description='Arico ariphmetical coder',
+        epilog='FAST PROTOTYPE'
+    )
 
-        with open('test_output.ari', 'wb+') as fout:
-            fout.write(bytes(encoded))
-            print("Wrote to test_output.ari")
+    parser.add_argument('-a', '--archive', action='store_true')  # positional argument
+    parser.add_argument('-e', '--extract', action='store_true')  # option that takes a value
+    parser.add_argument('-i', '--in', required=True) # on/off flag
+    parser.add_argument('-o', '--out')  # on/off flag
 
-    with open('test_output.ari', 'rb') as fin:
-        arico = Arico(fin)
-        print("Reversing...")
-        decoded = arico.decode()
+    args = parser.parse_args()
 
-        with open('test_input_recover.txt', 'wb+') as f:
-            f.write(bytes(decoded))
-            print("Wrote to test_input_recover.txt")
+    if args.archive and args.extract:
+        raise Exception("You can't specify both -a and -e")
+
+    if args.archive:
+        in_file = getattr(args, 'in')
+        out_file = getattr(args, 'out')
+        if not out_file:
+            out_file = in_file + '.ari'
+
+        with open(in_file, 'rb') as fin:
+            arico = Arico(fin)
+            fact, encoded = arico.encode()
+
+            dec = str(mpf(mpf(fact.numerator) / mpf(fact.denominator)))
+            print(f"Decimal encoded result: {dec}")
+
+            with open(out_file, 'wb+') as fout:
+                fout.write(bytes(encoded))
+                print(f"Archived data has been written to {out_file}")
+                exit(0)
+
+    if args.extract:
+        in_file = getattr(args, 'in')
+        out_file = getattr(args, 'out')
+        if not out_file:
+            out_file = in_file[-4:]
+
+        with open(in_file, 'rb') as fin:
+            arico = Arico(fin)
+            decoded = arico.decode()
+
+            with open(out_file, 'wb+') as f:
+                f.write(bytes(decoded))
+                print(f"Extracted data has been written to {out_file}")
