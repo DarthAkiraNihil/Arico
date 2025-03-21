@@ -1,9 +1,36 @@
 import argparse
+import copy
+import math
 import sys
 from fractions import Fraction
 from decimal import Decimal
 from mpmath import mp, mpf
 from typing import List
+import string
+digs = string.digits + string.ascii_letters
+
+
+def int2base(x, base):
+    if x < 0:
+        sign = -1
+    elif x == 0:
+        return digs[0]
+    else:
+        sign = 1
+
+    x *= sign
+    digits = []
+
+    while x:
+        digits.append(digs[int(x % base)])
+        x = int(x // base)
+
+    if sign < 0:
+        digits.append('-')
+
+    digits.reverse()
+
+    return ''.join(digits)
 
 
 class Arico:
@@ -11,6 +38,7 @@ class Arico:
         self._file = file
         self._data: List[int] = list()
         self._length = 0
+        self._base = 10
 
     @staticmethod
     def _frac_to_float(fraction: Fraction, accuracy: int) -> str:
@@ -33,6 +61,7 @@ class Arico:
 
         return result
 
+    # Вспомогательная функция преобразования числа в набойрбайт
     @staticmethod
     def _int_to_bytes(value: int, desired_length: int = None):
 
@@ -49,22 +78,24 @@ class Arico:
 
         return transformed[::-1]
 
-
+    # Метод упаковки закодированного сообщения в итоговый набор байт с требуемой структурой
     def _pack(self, encode_result, counts):
+        # Сигнатура
         signature = [0x41, 0x52, 0x49]  # ARI
 
+        # Длина длины и словаря
         length_of_length = (self._length.bit_length() + 7) // 8
         length_of_table = len(counts.keys())
 
         length = list(self._int_to_bytes(self._length))
         length_checkpoint = 0x2e
-
+        # Упаковка словаря
         counts_bytes = list()
         for k, v in counts.items():
             counts_bytes += [k, *self._int_to_bytes(v, length_of_length)]
 
         counts_checkpoint = 0x2e
-
+        # Преобразование дроби в вещественное число
         # decimal_result = str(mpf(mpf(encode_result.numerator) / mpf(encode_result.denominator)))
         decimal_result = "{0:f}".format(Decimal(encode_result.numerator) / Decimal(encode_result.denominator))
         _solid, _partial = decimal_result.split('.')[0], decimal_result.split('.')[1]
@@ -74,13 +105,16 @@ class Arico:
         else:
             encoded = [0xff]
 
+        # Преобразование дробной части в набор байт
         encoded += self._int_to_bytes(int(_partial))
 
         return [*signature, length_of_length, length_of_table, *length, length_checkpoint, *counts_bytes, counts_checkpoint, *encoded]
 
+    # Метод кодирования сообщения
     def encode(self):
         counts = dict()
 
+        # Считывание данных с файла и построение статистики
         while byte := int.from_bytes(self._file.read(1), "big", signed=False):
             if byte not in counts:
                 counts[byte] = 0
@@ -88,12 +122,15 @@ class Arico:
             self._length += 1
             self._data.append(byte)
 
+        # Сортировка словаря по ключам
         counts = {ck: cv for ck, cv in sorted(counts.items(), key=lambda x: x[0])}
 
+        # Построение вероятностей
         probabilities = {
             b: Fraction(c, self._length) for b, c in counts.items()
         }
 
+        # Построение распределения
         keys = list(probabilities.keys())
 
         distribution = dict()
@@ -107,23 +144,44 @@ class Arico:
                     distribution[previous][1] + probabilities[k]
                 )
 
+        # Представление начала и конца интервала в виде дробей
         low, high = Fraction(0, 1), Fraction(1, 1)
 
+        # Кодирование
         for idx, byte in enumerate(self._data):
             rng = high - low
             high = low + rng * distribution[byte][1]
             low = low + rng * distribution[byte][0]
 
+        # Упаковка в байты
         result = self._pack(low, counts)
 
         return low, result
 
+    # Вспомогательный метод считывания следующего байта в файле как целое число
     @staticmethod
     def _next_byte(file):
         return int.from_bytes(file.read(1), "big", signed=False)
 
+    @staticmethod
+    def _append_with_alignment(dst: list, fills: list, byte: int, base: int):
+        offset = 4
+
+        fill = fills[-1]
+
+        if fill + offset <= 8:
+            dst[-1] = (dst[-1] << offset) + byte
+            fills[-1] += offset
+        else:
+            dst[-1] = (dst[-1] << (8 - fill)) + (byte >> (offset - 8 + fill))
+            dst.append(byte & (2 ** (offset - 8 + fill) - 1))
+            fills.append((offset - 8 + fill))
+
+
+    # Функция декодирования сообщения
     def decode(self):
 
+        # Проверка сигнатуры и считывание длин
         signature_ok = all([
             self._next_byte(self._file) == 0x41,
             self._next_byte(self._file) == 0x52,
@@ -143,9 +201,11 @@ class Arico:
         length = int.from_bytes(length, "big", signed=False)
 
         length_checkpoint = self._next_byte(self._file)
+        # Должен дойти до контрольной точки
         if length_checkpoint != 0x2e:
             raise Exception("Invalid format")
 
+        # Считывание частот
         counts = dict()
         for _ in range(length_of_table):
             byte = self._next_byte(self._file)
@@ -156,9 +216,11 @@ class Arico:
             counts[byte] = count
 
         counts_checkpoint = self._next_byte(self._file)
+        # Должен дойти до контрольной точки
         if counts_checkpoint != 0x2e:
             raise Exception("Invalid format")
 
+        # Считывание закодированного числа и представление в виде кода
         start = self._next_byte(self._file)
         if start == 0xff:
             code = Fraction(1, 1)
@@ -173,6 +235,7 @@ class Arico:
         else:
             raise Exception("Invalid format")
 
+        # Построение вероятностей и интервала кодирования
         probabilities = {
             b: Fraction(c, length) for b, c in counts.items()
         }
@@ -192,6 +255,7 @@ class Arico:
 
         decoded = list()
 
+        # Декодирование
         for _ in range(length):
             for k, v in distribution.items():
                 if v[0] <= code < v[1]:
@@ -202,12 +266,151 @@ class Arico:
 
         return decoded
 
+    # Метод упаковки закодированного сообщения в итоговый набор байт с требуемой структурой
+    def _pack_solid(self, encode_result, counts):
+        # Сигнатура
+        signature = [0x41, 0x52, 0x49]  # ARI
+
+        # Длина длины и словаря
+        length_of_length = (self._length.bit_length() + 7) // 8
+        length_of_table = len(counts.keys())
+
+        length = list(self._int_to_bytes(self._length))
+        length_checkpoint = 0x2e
+        # Упаковка словаря
+        counts_bytes = list()
+        for k, v in counts.items():
+            counts_bytes += [k, *self._int_to_bytes(v, length_of_length)]
+
+        counts_checkpoint = 0x2e
+        # Преобразование дроби в вещественное число
+
+        return [
+            *signature,
+            length_of_length,
+            length_of_table,
+            *length,
+            length_checkpoint,
+            self._base,
+            *counts_bytes,
+            counts_checkpoint,
+            *encode_result
+        ]
+
+
+
+    def encode_solid(self):
+        counts = dict()
+
+        # Считывание данных с файла и построение статистики
+        while byte := int.from_bytes(self._file.read(1), "big", signed=False):
+            if byte not in counts:
+                counts[byte] = 0
+            counts[byte] += 1
+            self._length += 1
+            self._data.append(byte)
+
+        # Сортировка словаря по ключам
+        scaling = self._base ** 23
+        counts = {ck: cv for ck, cv in sorted(counts.items(), key=lambda x: x[0])}
+        pure_counts = copy.deepcopy(counts)
+        counts = {ck: cv * scaling // len(self._data) for ck, cv in counts.items()}
+
+        # Построение распределения
+        keys = list(counts.keys())
+
+        distribution = dict()
+        for idx, k in enumerate(keys):
+            if idx == 0:
+                distribution[k] = (0, counts[k])
+            else:
+                previous = keys[idx - 1]
+                distribution[k] = (
+                    distribution[previous][1],
+                    distribution[previous][1] + counts[k]
+                )
+
+        scale = distribution[keys[-1]][1]
+
+        print(distribution)
+        x = ""
+        result = [0]
+        fills = [0]
+        # Представление начала и конца интервала в виде дробей
+        low, high = 0, scale + 1
+        power_loss = 0
+        # Кодирование
+        for idx, byte in enumerate(self._data):
+
+            rng = high - low + 1
+            high = low + rng * distribution[byte][1] // scale - 1
+            low = low + rng * distribution[byte][0] // scale
+
+            # print(f"LO: {low}, HI: {high}")
+
+            while True:
+
+                print(f"JAJAJ LO: {int2base(low, self._base)}, HI: {int2base(high, self._base)}, LELO: {len(int2base(low, self._base))}, LEHI: {len(int2base(high, self._base))}")
+
+                # low_based = int2base(low, self._base).ljust(24, '0') #if low != 0 else '0' * 24
+                # high_based = int2base(high, self._base).ljust(24, str(self._base - 1))
+                low_based = int2base(low, self._base)
+                high_based = int2base(high, self._base)
+                minle = max(len(low_based), len(high_based))
+                low_based = low_based.zfill(minle).ljust(24, '0')
+                high_based = high_based.zfill(minle).ljust(24, str(self._base - 1))
+
+                print(f"LO: {low_based}, HI: {high_based}")
+                elder_low = low_based[0]
+                elder_high = high_based[0]
+                print(f"ELO: {elder_low}, EHI: {elder_high}")
+
+                if elder_high == elder_low:
+                    print(f"EQ: {elder_high}")
+                    x += str(elder_low)
+                    self._append_with_alignment(result, fills, int(elder_low), 10)
+                    while power_loss != 0:
+                        # k = ((high ^ 0xFFFFFF) & 0x800000)
+                        x += str(self._base - 1 - int(elder_high, self._base))
+                        self._append_with_alignment(result, fills, 0, 10)
+                        power_loss -= 1
+                else:
+                    if int(low_based[1], self._base) == self._base - 1 and int(high_based[1], self._base) == 0 and (abs(int(elder_low, self._base) - int(elder_high, self._base)) == 1):
+                        print("LOSS")
+                        low_based = low_based[0] + low_based[2:] + '0'
+                        high_based = high_based[0] + high_based[2:] + str(self._base - 1)
+                        # low &= 0x3FFFFFF
+                        # high &= 0x400000
+                        power_loss += 1
+                    else:
+                        break
+
+                low = int(low_based[1:].ljust(24, '0'), self._base)
+                high = int(high_based[1:].ljust(24, str(self._base - 1)), self._base)
+
+                print(f"ALO: {low_based[1:].ljust(24, '0')}, HI: {high_based[1:].ljust(24, str(self._base - 1))}")
+                #print(f"ALO: {low}, AHI: {high}")
+
+        print(x)
+        print(result)
+        print(list(map(lambda y: bin(y)[2:].zfill(8), result)))
+
+        # Упаковка в байты
+        result_ = self._pack_solid(result, pure_counts)
+        print(result_)
+
+        return low, None
+
+    def decode_solid(self):
+        pass
+
 sys.set_int_max_str_digits(2**31 - 1)
 
 if __name__ == '__main__':
 
     mp.dps = 10**3
 
+    # Считывание аргументов командной строки
     parser = argparse.ArgumentParser(
         prog='arico',
         description='Arico ariphmetical coder',
@@ -221,28 +424,32 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # Нельзя одновременно и распаковать, и запаковать
     if args.archive and args.extract:
         raise Exception("You can't specify both -a and -e")
 
     if args.archive:
+        # Открытие файла и кодирование
         in_file = getattr(args, 'in')
         out_file = getattr(args, 'out')
         if not out_file:
-            out_file = in_file + '.ari'
+            out_file = in_file + '.ari2'
 
         with open(in_file, 'rb') as fin:
             arico = Arico(fin)
-            fact, encoded = arico.encode()
-
-            dec = str(mpf(mpf(fact.numerator) / mpf(fact.denominator)))
-            print(f"Decimal encoded result: {dec}")
-
-            with open(out_file, 'wb+') as fout:
-                fout.write(bytes(encoded))
-                print(f"Archived data has been written to {out_file}")
-                exit(0)
+            arico.encode_solid()
+            # fact, encoded = arico.encode()
+            #
+            # dec = str(mpf(mpf(fact.numerator) / mpf(fact.denominator)))
+            # print(f"Decimal encoded result: {dec}")
+            #
+            # with open(out_file, 'wb+') as fout:
+            #     fout.write(bytes(encoded))
+            #     print(f"Archived data has been written to {out_file}")
+            #     exit(0)
 
     if args.extract:
+        # Открытие файла и декодирование
         in_file = getattr(args, 'in')
         out_file = getattr(args, 'out')
         if not out_file:
