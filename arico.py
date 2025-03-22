@@ -4,41 +4,43 @@ import math
 import sys
 from fractions import Fraction
 from decimal import Decimal
-from mpmath import mp, mpf
+from mpmath import mp, mpf, clsin
 from typing import List
 import string
-digs = string.digits + string.ascii_letters
-
-
-def int2base(x, base):
-    if x < 0:
-        sign = -1
-    elif x == 0:
-        return digs[0]
-    else:
-        sign = 1
-
-    x *= sign
-    digits = []
-
-    while x:
-        digits.append(digs[int(x % base)])
-        x = int(x // base)
-
-    if sign < 0:
-        digits.append('-')
-
-    digits.reverse()
-
-    return ''.join(digits)
-
 
 class Arico:
+    _digits = string.digits + string.ascii_letters
     def __init__(self, file):
+
+
         self._file = file
         self._data: List[int] = list()
         self._length = 0
-        self._base = 10
+        self._base = 36
+
+
+    @classmethod
+    def int2base(cls, x, base):
+        if x < 0:
+            sign = -1
+        elif x == 0:
+            return cls._digits[0]
+        else:
+            sign = 1
+
+        x *= sign
+        digits = []
+
+        while x:
+            digits.append(cls._digits[int(x % base)])
+            x = int(x // base)
+
+        if sign < 0:
+            digits.append('-')
+
+        digits.reverse()
+
+        return ''.join(digits)
 
     @staticmethod
     def _frac_to_float(fraction: Fraction, accuracy: int) -> str:
@@ -163,20 +165,35 @@ class Arico:
     def _next_byte(file):
         return int.from_bytes(file.read(1), "big", signed=False)
 
-    @staticmethod
-    def _append_with_alignment(dst: list, fills: list, byte: int, base: int):
-        offset = 4
+    @classmethod
+    def _normalize(cls, number_repr: List[int]):
+        for idx in range(len(number_repr) - 1, 0, -1):
+            elder = number_repr[idx] >> 8
+            number_repr[idx] &= 0xFF
+            number_repr[idx - 1] += elder
 
-        fill = fills[-1]
+        elder = number_repr[0] >> 8
+        number_repr[0] &= 0xFF
+        if elder == 0:
+            return number_repr
 
-        if fill + offset <= 8:
-            dst[-1] = (dst[-1] << offset) + byte
-            fills[-1] += offset
-        else:
-            dst[-1] = (dst[-1] << (8 - fill)) + (byte >> (offset - 8 + fill))
-            dst.append(byte & (2 ** (offset - 8 + fill) - 1))
-            fills.append((offset - 8 + fill))
+        return [elder, *number_repr]
 
+    @classmethod
+    def _append_with_alignment(cls, dst: List[int], byte: int):
+        normal, rem = byte // 2, byte % 2
+
+        doubled = list(map(lambda x: x << 1, dst))
+        res = cls._normalize(doubled)
+
+        for _ in range(normal - 1):
+
+            for idx in range(len(dst) -1, -1, -1):
+                res[idx] += dst[idx]
+            res = cls._normalize(res)
+
+        res[-1] += rem
+        return cls._normalize(res)
 
     # Функция декодирования сообщения
     def decode(self):
@@ -348,17 +365,27 @@ class Arico:
 
             # print(f"LO: {low}, HI: {high}")
 
+            # low_based = int2base(low, self._base)
+            # high_based = int2base(high, self._base)
+            # minle = max(len(low_based), len(high_based))
+            # low_based = low_based.zfill(minle)
+            # high_based = high_based.zfill(minle)
+
             while True:
 
-                print(f"JAJAJ LO: {int2base(low, self._base)}, HI: {int2base(high, self._base)}, LELO: {len(int2base(low, self._base))}, LEHI: {len(int2base(high, self._base))}")
+                print(f"JAJAJ LO: {self.int2base(low, self._base)}, HI: {self.int2base(high, self._base)}, LELO: {len(self.int2base(low, self._base))}, LEHI: {len(self.int2base(high, self._base))}")
 
                 # low_based = int2base(low, self._base).ljust(24, '0') #if low != 0 else '0' * 24
                 # high_based = int2base(high, self._base).ljust(24, str(self._base - 1))
-                low_based = int2base(low, self._base)
-                high_based = int2base(high, self._base)
+
+                # low_based = low_based.ljust(24, '0')
+                # high_based = high_based.ljust(24, str(self._base - 1))
+
+                low_based = self.int2base(low, self._base)
+                high_based = self.int2base(high, self._base)
                 minle = max(len(low_based), len(high_based))
                 low_based = low_based.zfill(minle).ljust(24, '0')
-                high_based = high_based.zfill(minle).ljust(24, str(self._base - 1))
+                high_based = high_based.zfill(minle).ljust(24, self._digits[self._base - 1])
 
                 print(f"LO: {low_based}, HI: {high_based}")
                 elder_low = low_based[0]
@@ -368,30 +395,35 @@ class Arico:
                 if elder_high == elder_low:
                     print(f"EQ: {elder_high}")
                     x += str(elder_low)
-                    self._append_with_alignment(result, fills, int(elder_low), 10)
+                    result = self._append_with_alignment(result, int(elder_low, self._base))
                     while power_loss != 0:
                         # k = ((high ^ 0xFFFFFF) & 0x800000)
                         x += str(self._base - 1 - int(elder_high, self._base))
-                        self._append_with_alignment(result, fills, 0, 10)
+                        # byte = self._base - 1 if elder_high
+                        result = self._append_with_alignment(result, self._base - 1 - int(elder_high, self._base))
                         power_loss -= 1
                 else:
                     if int(low_based[1], self._base) == self._base - 1 and int(high_based[1], self._base) == 0 and (abs(int(elder_low, self._base) - int(elder_high, self._base)) == 1):
                         print("LOSS")
                         low_based = low_based[0] + low_based[2:] + '0'
-                        high_based = high_based[0] + high_based[2:] + str(self._base - 1)
+                        high_based = high_based[0] + high_based[2:] + self._digits[self._base - 1]
                         # low &= 0x3FFFFFF
                         # high &= 0x400000
                         power_loss += 1
                     else:
+                        # low = int(low_based, self._base)
+                        # high = int(high_based, self._base)
                         break
 
+                # low_based = low_based[1:].ljust(24, '0')
+                # high_based = high_based[1:].ljust(24, str(self._base - 1))
                 low = int(low_based[1:].ljust(24, '0'), self._base)
-                high = int(high_based[1:].ljust(24, str(self._base - 1)), self._base)
+                high = int(high_based[1:].ljust(24, self._digits[self._base - 1]), self._base)
 
-                print(f"ALO: {low_based[1:].ljust(24, '0')}, HI: {high_based[1:].ljust(24, str(self._base - 1))}")
+                print(f"ALO: {low_based[1:].ljust(24, '0')}, HI: {high_based[1:].ljust(24, self._digits[self._base - 1])}")
                 #print(f"ALO: {low}, AHI: {high}")
 
-        print(x)
+        print(x.zfill(8* (len(x) // 8 + 1)))
         print(result)
         print(list(map(lambda y: bin(y)[2:].zfill(8), result)))
 
@@ -407,7 +439,6 @@ class Arico:
 sys.set_int_max_str_digits(2**31 - 1)
 
 if __name__ == '__main__':
-
     mp.dps = 10**3
 
     # Считывание аргументов командной строки
