@@ -16,7 +16,7 @@ class Arico:
         self._file = file
         self._data: List[int] = list()
         self._length = 0
-        self._base = 36
+        self._base = 10
 
 
     @classmethod
