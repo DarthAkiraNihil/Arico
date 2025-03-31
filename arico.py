@@ -5,15 +5,18 @@ import sys
 from fractions import Fraction
 from decimal import Decimal
 from mpmath import mp, mpf, clsin
-from typing import List
+from typing import List, BinaryIO
 import string
+
+
+class AricoException(Exception): ...
 
 class Arico:
     _digits = string.digits + string.ascii_letters
     def __init__(self, file):
 
 
-        self._file = file
+        self._file: BinaryIO = file
         self._data: List[int] = list()
         self._length = 0
         self._base = 10
@@ -84,12 +87,14 @@ class Arico:
     def _pack(self, encode_result, counts):
         # Сигнатура
         signature = [0x41, 0x52, 0x49]  # ARI
+        print(f"Generated signature: {signature}")
 
         # Длина длины и словаря
         length_of_length = (self._length.bit_length() + 7) // 8
         length_of_table = len(counts.keys())
 
         length = list(self._int_to_bytes(self._length))
+        print(f"Generated length: {length}")
         length_checkpoint = 0x2e
         # Упаковка словаря
         counts_bytes = list()
@@ -163,7 +168,11 @@ class Arico:
     # Вспомогательный метод считывания следующего байта в файле как целое число
     @staticmethod
     def _next_byte(file):
-        return int.from_bytes(file.read(1), "big", signed=False)
+        read = file.read(1)
+        print(f"READ VAL: {read}")
+        if not read:
+            return -1
+        return int.from_bytes(read, "big", signed=False)
 
     @classmethod
     def _normalize(cls, number_repr: List[int]):
@@ -179,21 +188,22 @@ class Arico:
 
         return [elder, *number_repr]
 
-    @classmethod
-    def _append_with_alignment(cls, dst: List[int], byte: int):
-        normal, rem = byte // 2, byte % 2
+    def _append_with_alignment(self, dst: List[int], byte: int):
+        normal, rem = byte // self._base, byte % self._base
 
         doubled = list(map(lambda x: x << 1, dst))
-        res = cls._normalize(doubled)
+        res = self._normalize(doubled)
 
         for _ in range(normal - 1):
 
             for idx in range(len(dst) -1, -1, -1):
                 res[idx] += dst[idx]
-            res = cls._normalize(res)
+            res = self._normalize(res)
 
         res[-1] += rem
-        return cls._normalize(res)
+        ress = self._normalize(res)
+        print(f"TRACE: res={ress}, dst={dst}, byte={byte}")
+        return ress
 
     # Функция декодирования сообщения
     def decode(self):
@@ -287,19 +297,26 @@ class Arico:
     def _pack_solid(self, encode_result, counts):
         # Сигнатура
         signature = [0x41, 0x52, 0x49]  # ARI
+        print(f"Generated signature: {signature}")
 
         # Длина длины и словаря
         length_of_length = (self._length.bit_length() + 7) // 8
         length_of_table = len(counts.keys())
 
         length = list(self._int_to_bytes(self._length))
+        print(f"Generated length: {length}")
         length_checkpoint = 0x2e
+        print(f"Length checkpoint: {length_checkpoint}")
         # Упаковка словаря
         counts_bytes = list()
         for k, v in counts.items():
             counts_bytes += [k, *self._int_to_bytes(v, length_of_length)]
+        print(f"Generated counts: {counts_bytes}")
 
         counts_checkpoint = 0x2e
+        print(f"Counts checkpoint: {counts_checkpoint}")
+        print(f"Encode result: {encode_result}")
+        print(f"Base: {self._base}")
         # Преобразование дроби в вещественное число
 
         return [
@@ -431,16 +448,120 @@ class Arico:
         result_ = self._pack_solid(result, pure_counts)
         print(result_)
 
-        return low, None
+        return result_
 
     def decode_solid(self):
-        pass
+        # Проверка сигнатуры и считывание длин
+        signature_ok = all([
+            self._next_byte(self._file) == 0x41,
+            self._next_byte(self._file) == 0x52,
+            self._next_byte(self._file) == 0x49,
+        ])
+
+        if not signature_ok:
+            raise AricoException("Error: Invalid signature")
+
+        length_of_length = self._next_byte(self._file)
+        length_of_table = self._next_byte(self._file)
+
+        length = list()
+        for _ in range(length_of_length):
+            length.append(self._next_byte(self._file))
+
+        length = int.from_bytes(length, "big", signed=False)
+
+        length_checkpoint = self._next_byte(self._file)
+        # Должен дойти до контрольной точки
+        if length_checkpoint != 0x2e:
+            raise AricoException(f"Error: Invalid format length_checkpoint not found, found byte = {length_checkpoint}")
+
+        # Считывание основания закодированного числа
+        base = self._next_byte(self._file)
+        if base < 2 or base > 36:
+            raise AricoException(f"Error: Invalid base: {base}. Must be in 2-36 range inclusively")
+
+        # Считывание частот
+        counts = dict()
+        for _ in range(length_of_table):
+            byte = self._next_byte(self._file)
+            count = list()
+            for __ in range(length_of_length):
+                count.append(self._next_byte(self._file))
+            count = int.from_bytes(count, "big", signed=False)
+            counts[byte] = count
+
+        counts_checkpoint = self._next_byte(self._file)
+        # Должен дойти до контрольной точки
+        if counts_checkpoint != 0x2e:
+            raise AricoException(f"Error: Invalid format counts_checkpoint not found, found byte = {counts_checkpoint}")
+
+        # Считывание закодированного числа и представление в виде кода
+
+        start = self._next_byte(self._file)
+        print(start)
+        start = self._next_byte(self._file)
+        print(start)
+        start = self._next_byte(self._file)
+        print(start)
+        start = self._next_byte(self._file)
+        print(start)
+        start = self._next_byte(self._file)
+        print(start)
+
+
+
+        # Сортировка словаря по ключам
+        scaling = self._base ** 23
+        counts = {ck: cv for ck, cv in sorted(counts.items(), key=lambda x: x[0])}
+        pure_counts = copy.deepcopy(counts)
+        counts = {ck: cv * scaling // length for ck, cv in counts.items()}
+
+        # Построение распределения
+        keys = list(counts.keys())
+
+        distribution = dict()
+        for idx, k in enumerate(keys):
+            if idx == 0:
+                distribution[k] = (0, counts[k])
+            else:
+                previous = keys[idx - 1]
+                distribution[k] = (
+                    distribution[previous][1],
+                    distribution[previous][1] + counts[k]
+                )
+
+        scale = distribution[keys[-1]][1]
+
+        print(distribution)
+
+        decoded = list()
+
+        low, high = 0, scale + 1
+
+        for _ in range(length):
+
+            rng = high - low + 1
+            value = ((code - low + 1))
+
+            for k, v in distribution.items():
+                pass
+
+        # Декодирование
+        for _ in range(length):
+            for k, v in distribution.items():
+                if v[0] <= code < v[1]:
+                    decoded.append(k)
+                    rng = v[1] - v[0]
+                    code = (code - v[0]) / rng
+                    break
+
+        return decoded
 
 sys.set_int_max_str_digits(2**31 - 1)
 
 if __name__ == '__main__':
-    mp.dps = 10**3
 
+    mp.dps = 10**3
     # Считывание аргументов командной строки
     parser = argparse.ArgumentParser(
         prog='arico',
@@ -468,28 +589,25 @@ if __name__ == '__main__':
 
         with open(in_file, 'rb') as fin:
             arico = Arico(fin)
-            arico.encode_solid()
-            # fact, encoded = arico.encode()
-            #
-            # dec = str(mpf(mpf(fact.numerator) / mpf(fact.denominator)))
-            # print(f"Decimal encoded result: {dec}")
-            #
-            # with open(out_file, 'wb+') as fout:
-            #     fout.write(bytes(encoded))
-            #     print(f"Archived data has been written to {out_file}")
-            #     exit(0)
+            encoded = arico.encode_solid()
+
+            with open(out_file, 'wb+') as fout:
+                fout.write(bytes(encoded))
+                print(f"Archived data has been written to {out_file}")
+                exit(0)
 
     if args.extract:
         # Открытие файла и декодирование
         in_file = getattr(args, 'in')
         out_file = getattr(args, 'out')
+
         if not out_file:
             out_file = in_file[-4:]
 
         with open(in_file, 'rb') as fin:
             arico = Arico(fin)
-            decoded = arico.decode()
+            decoded = arico.decode_solid()
 
-            with open(out_file, 'wb+') as f:
-                f.write(bytes(decoded))
-                print(f"Extracted data has been written to {out_file}")
+            # with open(out_file, 'wb+') as f:
+            #     f.write(bytes(decoded))
+            #     print(f"Extracted data has been written to {out_file}")
