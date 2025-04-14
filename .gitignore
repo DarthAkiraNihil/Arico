@@ -186,3 +186,6 @@ fabric.properties
 *.ari
 *test*
 *.txt
+a.py
+ari2
+arico_opt_old.py
