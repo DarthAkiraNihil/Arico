@@ -4,7 +4,9 @@ import sys
 from typing import List, BinaryIO
 
 
-class AricoException(Exception): ...
+class AricoException(Exception):
+    pass
+
 
 class Arico:
     # _digits = string.digits + string.ascii_letters
@@ -142,7 +144,6 @@ class Arico:
         width = list(self._int_to_bytes(self._width))
         last = self._data[-1]  # Записываем последний бит исходного потока для успешного декодирования
 
-
         length_checkpoint = 0x2e
         # Упаковка словаря
         counts_bytes = list()
@@ -177,7 +178,7 @@ class Arico:
             *encode_result
         ]
 
-    def encode(self):
+    def encode(self):  # noqa: C901
         counts = dict()
 
         # Считывание данных с файла и построение статистики
@@ -209,7 +210,7 @@ class Arico:
         fills = [0]
 
         low, high = 0, scale + 1
-        power_loss = 0 # Количество бит исчезновения порядка
+        power_loss = 0  # Количество бит исчезновения порядка
 
         written = 0
 
@@ -228,8 +229,7 @@ class Arico:
                 elder_low = low >> (self._width - 1)
                 elder_high = high >> (self._width - 1)
 
-
-                if elder_high == elder_low: # При совпадении - запись совпадающего бита в выходной поток\
+                if elder_high == elder_low:  # При совпадении - запись совпадающего бита в выходной поток\
                     self._write_digit(result, fills, elder_low)
                     written += 1
                     # Если имело место исчезновение порядка - выталкиваем инвертированный старший бит верхней границы в выходной поток столько раз, сколько было исчезновений
@@ -247,7 +247,7 @@ class Arico:
                         low &= (2 ** self._width - 1) - (2 ** (self._width - 1)) - (2 ** (self._width - 2))
                         high |= (2 ** self._width - 1)
                         power_loss += 1
-                    else: # Иначе никаких действий предпринимать не надо
+                    else:  # Иначе никаких действий предпринимать не надо
                         break
 
                 # Смещение границ на 1
@@ -284,7 +284,7 @@ class Arico:
 
         return packed
 
-    def decode(self):
+    def decode(self):  # noqa: C901
         # Проверка сигнатуры и считывание длин
         signature_ok = all([
             self._next_byte(self._file) == 0x41,
@@ -368,9 +368,9 @@ class Arico:
         # Установка нижней и верхней границы
         low, high = 0, scale + 1
 
-        eof = False # Флаг конца файла
+        eof = False  # Флаг конца файла
 
-        rd = 0 # Количество раскодированных байт
+        rd = 0  # Количество раскодированных байт
 
         # Декодирование
         while not eof and rd < length:
@@ -432,9 +432,8 @@ class Arico:
         decode_result[-1] = last
         return decode_result
 
-sys.set_int_max_str_digits(2**31 - 1)
 
-if __name__ == '__main__':
+if __name__ == '__main__':  # noqa: C901
 
     # Считывание аргументов командной строки
     parser = argparse.ArgumentParser(
