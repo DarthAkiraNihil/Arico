@@ -1,51 +1,24 @@
 import argparse
 import copy
 import sys
-from ctypes import windll
-from fractions import Fraction
-from decimal import Decimal
 from typing import List, BinaryIO
-import string
 
 
 class AricoException(Exception): ...
 
 class Arico:
-    _digits = string.digits + string.ascii_letters
-    def __init__(self, file, width):
+    # _digits = string.digits + string.ascii_letters
+    def __init__(self, file, width=32, count_scale=0):
 
         self._file: BinaryIO = file
         self._data: List[int] = list()
 
-        self._length = 0
-        self._read_bits = 0
-        self._width = width
+        self._length = 0  # Длина исходного потока
+        self._read_bits = 0  # Количество прочитанных бит, вспомогательное поле
+        self._width = width  # Ширина кодового слова
+        self._count_scale = count_scale  # Масштабирование частоты на некоторое количество байт. 0 - масштабирование не нужно
 
-
-    @classmethod
-    def int2base(cls, x, base):
-        if x < 0:
-            sign = -1
-        elif x == 0:
-            return cls._digits[0]
-        else:
-            sign = 1
-
-        x *= sign
-        digits = []
-
-        while x:
-            digits.append(cls._digits[int(x % base)])
-            x = int(x // base)
-
-        if sign < 0:
-            digits.append('-')
-
-        digits.reverse()
-
-        return ''.join(digits)
-
-    # Вспомогательная функция преобразования числа в набойрбайт
+    # Вспомогательная функция преобразования числа в набор байт
     @staticmethod
     def _int_to_bytes(value: int, desired_length: int = None):
 
@@ -56,45 +29,74 @@ class Arico:
             transformed.append(value % 256)
             value >>= 8
 
+        # если необходимо, чтобы количество байт было больше, чем требуется - дополняем нулями
         if desired_length is not None:
             while len(transformed) < desired_length:
                 transformed.append(0)
 
+        # результат будет записан в обратном порядке, потому необходимо отзеркалить его
         return transformed[::-1]
 
     # Вспомогательный метод считывания следующего байта в файле как целое число
     @staticmethod
     def _next_byte(file):
         read = file.read(1)
-        print(f"READ VAL: {read}")
         if not read:
             return -1
         return int.from_bytes(read, "big", signed=False)
 
-    def _write_digit(self, dst: List[int], fills: List[int], digit: int):
-        offset = 1
-        print(f"writing digit: {digit}")
+    # Вспомогательная функция построения базового распределения
+    # Принимает на вход словарь частот
+    @staticmethod
+    def _build_distribution(counts):
+        keys = list(counts.keys())
+
+        distribution = dict()
+        for idx, k in enumerate(keys):
+            if idx == 0:
+                distribution[k] = (0, counts[k])
+            else:
+                previous = keys[idx - 1]
+                distribution[k] = (
+                    distribution[previous][1],
+                    distribution[previous][1] + counts[k]
+                )
+
+        return distribution, keys
+
+    # Вспомогательная функция записи цифры в выходной поток
+    # Принимает на вход список-назначение, список заполненности байтов и саму цифру
+    @staticmethod
+    def _write_digit(dst: List[int], fills: List[int], digit: int):
+        offset = 1  # Величина сдвига. Может быть необходима, если основание кодового слова будет другим
 
         fill = fills[-1]
 
+        # Если после сдвига не будет переполнения байта - просто сдвигаем и записываем цифру
         if fill + offset <= 8:
             dst[-1] = (dst[-1] << offset) + digit
             fills[-1] += offset
+        # Иначе излишки сдвигаем в новый разряд, и только затем записываем в конец
         else:
             dst[-1] = (dst[-1] << (8 - fill)) + (digit >> (offset - 8 + fill))
             dst.append(digit & (2 ** (offset - 8 + fill) - 1))
             fills.append((offset - 8 + fill))
 
+    # Вспомогательный метод чтения следующей цифры из входного потока
     def _read_digit(self):
 
+        # Если достигли конца файла - возвращаем -1 - невозможное значение, которое будет являться флагом конца файла
         read = self._file.read(1)
         if not read:
             return -1
 
+        # Считываем 1 бит, т.к. основание системы счисления - 2
         length = 1
 
         value = int.from_bytes(read, "big", signed=False)
 
+        # Если мы ещё не считали полный байт, то из считанного байта извлекаем нужный разряд,
+        # перемещаем указатель в файле на 1 позицию назад, и возвращаем считанный разряд
         if self._read_bits + length <= 8:
             self._read_bits += length
             result = (value & ((2 ** length - 1) << (8 - self._read_bits))) >> (8 - self._read_bits)
@@ -104,17 +106,21 @@ class Arico:
                 self._read_bits = 0
             return result
 
+        # Иначе выясняем, сколько бит надо взять из текущего байта и сколько - из следующего
         remaining = 8 - self._read_bits
         taken = (self._read_bits + length) - 8
 
         result = value & (2 ** remaining - 1)
 
+        # Чтение следующего байта, откуда заимствуем разряды
         read = self._file.read(1)
         if not read:
             taken_value = 0
         else:
             taken_value = int.from_bytes(read, "big", signed=False)
 
+        # Из нового считанного байта извлекаем нужный разряд,
+        # перемещаем указатель в файле на 1 позицию назад, и возвращаем считанный разряд
         result = (result << taken) + (((2 ** taken - 1) << (8 - taken)) & taken_value) >> (8 - taken)
 
         self._file.seek(-1, 1)
@@ -127,28 +133,44 @@ class Arico:
         # Сигнатура
         signature = [0x41, 0x52, 0x49]  # ARI
 
-        # Длина длины, словаря и ширины кодового слова
+        # Длина длины и ширины кодового слова
         length_of_length = (self._length.bit_length() + 7) // 8
-        length_of_table = len(counts.keys()) - 1
+        # length_of_table = len(counts.keys()) - 1
         length_of_width = (self._width.bit_length() + 7) // 8
 
         length = list(self._int_to_bytes(self._length))
         width = list(self._int_to_bytes(self._width))
+        last = self._data[-1]  # Записываем последний бит исходного потока для успешного декодирования
+
+
         length_checkpoint = 0x2e
         # Упаковка словаря
         counts_bytes = list()
-        for k, v in counts.items():
-            counts_bytes += [k, *self._int_to_bytes(v, length_of_length)]
+        for char in range(256):  # Больше 256 символов быть не может
+            if self._count_scale == 0:
+                if char in counts:
+                    char_bytes = self._int_to_bytes(counts[char], length_of_length)
+                else:  # Если символа нет - записываем 0 как частоту
+                    char_bytes = self._int_to_bytes(0, length_of_length)
+            else:
+                # Если было указано масштабирование частоты на количество байт - выполняем преобразование
+                if char in counts:
+                    char_bytes = self._int_to_bytes((counts[char] // self._length) * (2 ** (8 * self._count_scale) - 1), self._count_scale)
+                else:  # Если символа нет - записываем 0 как частоту
+                    char_bytes = self._int_to_bytes(0, self._count_scale)
+            counts_bytes += char_bytes
 
         counts_checkpoint = 0x2e
 
         return [
             *signature,
             length_of_length,
-            length_of_table,
+            # length_of_table,
             length_of_width,
             *length,
             *width,
+            self._count_scale,
+            last,
             length_checkpoint,
             *counts_bytes,
             counts_checkpoint,
@@ -170,7 +192,6 @@ class Arico:
             self._length += 1
             self._data.append(byte)
 
-        print(self._length)
         # Сортировка словаря по ключам с масштабированием по ширине кодового слова
         scaling = 2 ** self._width
         counts = {ck: cv for ck, cv in sorted(counts.items(), key=lambda x: x[0])}
@@ -178,24 +199,10 @@ class Arico:
         counts = {ck: cv * scaling // len(self._data) for ck, cv in counts.items()}
 
         # Построение распределения
-        keys = list(counts.keys())
-        print(keys)
-
-        distribution = dict()
-        for idx, k in enumerate(keys):
-            if idx == 0:
-                distribution[k] = (0, counts[k])
-            else:
-                previous = keys[idx - 1]
-                distribution[k] = (
-                    distribution[previous][1],
-                    distribution[previous][1] + counts[k]
-                )
+        distribution, keys = self._build_distribution(counts)
 
         # Коэффициент масштаба
         scale = distribution[keys[-1]][1]
-
-        print(distribution)
 
         # вспомогательные массивы для записи результата кодирования
         result = [0]
@@ -262,7 +269,6 @@ class Arico:
             written += 1
             power_loss -= 1
 
-        print(result)
         if written % self._length == 0:
             for _ in range(self._width):
                 self._write_digit(result, fills, 0)
@@ -272,10 +278,6 @@ class Arico:
                 written += 1
             for _ in range(self._width):
                 self._write_digit(result, fills, 0)
-
-        print(result)
-        print(fills)
-        print(list(map(lambda x: bin(x)[2:], result)))
 
         # Упаковка в байты
         packed = self._pack(result, pure_counts)
@@ -293,9 +295,9 @@ class Arico:
         if not signature_ok:
             raise AricoException("Error: Invalid signature")
 
-        # Считывание длин (в частности - длины исходного потока и ширины кодового слова)
+        # Считывание длин (в частности - длины исходного потока и ширины кодового слова), и последнего байта исходной последовательности
         length_of_length = self._next_byte(self._file)
-        length_of_table = self._next_byte(self._file) + 1
+        # length_of_table = self._next_byte(self._file) + 1
         length_of_width = self._next_byte(self._file)
 
         length = list()
@@ -308,8 +310,10 @@ class Arico:
         for _ in range(length_of_width):
             width.append(self._next_byte(self._file))
 
+        self._count_scale = self._next_byte(self._file)
+        last = self._next_byte(self._file)
+
         self._width = int.from_bytes(width, "big", signed=False)
-        print(f"W: {self._width}")
         length_checkpoint = self._next_byte(self._file)
         # Должен дойти до контрольной точки
         if length_checkpoint != 0x2e:
@@ -317,13 +321,16 @@ class Arico:
 
         # Считывание частот
         counts = dict()
-        for _ in range(length_of_table):
-            byte = self._next_byte(self._file)
+        for char in range(256):
             count = list()
             for __ in range(length_of_length):
                 count.append(self._next_byte(self._file))
             count = int.from_bytes(count, "big", signed=False)
-            counts[byte] = count
+            if count != 0:  # Нет смысла записывать символ с нулевой частотой
+                if self._count_scale == 0:
+                    counts[char] = count
+                else:  # Если имело место масштабирование частоты по количеству байт на них, то восстанавливаем её
+                    counts[char] = (count * length) // (2 ** (8 * self._count_scale) - 1)
 
         counts_checkpoint = self._next_byte(self._file)
         # Должен дойти до контрольной точки
@@ -353,21 +360,10 @@ class Arico:
         counts = {ck: cv * scaling // length for ck, cv in counts.items()}
 
         # Построение распределения
-        keys = list(counts.keys())
-
-        distribution = dict()
-        for idx, k in enumerate(keys):
-            if idx == 0:
-                distribution[k] = (0, counts[k])
-            else:
-                previous = keys[idx - 1]
-                distribution[k] = (
-                    distribution[previous][1],
-                    distribution[previous][1] + counts[k]
-                )
+        distribution, keys = self._build_distribution(counts)
 
         scale = distribution[keys[-1]][1]
-        decoded = list()
+        decode_result = list()
 
         # Установка нижней и верхней границы
         low, high = 0, scale + 1
@@ -385,13 +381,12 @@ class Arico:
 
             for k, v in distribution.items():
                 if v[0] <= value < v[1]:
-                    print(f"recognized: {k}, l: {v[0]}, v: {value}, h: {v[1]}")
-                    decoded.append(k)
+                    decode_result.append(k)
                     break
 
             # Пересчёт границ
-            high = low + rng * distribution[decoded[-1]][1] // scale - 1
-            low = low + rng * distribution[decoded[-1]][0] // scale
+            high = low + rng * distribution[decode_result[-1]][1] // scale - 1
+            low = low + rng * distribution[decode_result[-1]][0] // scale
 
             # Классические тесты на исчезновение порядка и считывание следующей цифры
             while True:
@@ -420,7 +415,6 @@ class Arico:
                 if next_digit == -1:
                     # Если файл закончился, то завершить декодирование
                     # code <<= 1
-                    print("eof reached")
                     eof = True
                     break
 
@@ -435,8 +429,8 @@ class Arico:
             print("OK")
         else:
             print("FAIL")
-        print(decoded)
-        return decoded
+        decode_result[-1] = last
+        return decode_result
 
 sys.set_int_max_str_digits(2**31 - 1)
 
@@ -449,16 +443,40 @@ if __name__ == '__main__':
         epilog='FAST PROTOTYPE'
     )
 
-    parser.add_argument('-a', '--archive', action='store_true')  # positional argument
-    parser.add_argument('-e', '--extract', action='store_true')  # option that takes a value
-    parser.add_argument('-i', '--in', required=True) # on/off flag
-    parser.add_argument('-o', '--out')  # on/off flag
+    parser.add_argument('-a', '--archive', action='store_true')
+    parser.add_argument('-e', '--extract', action='store_true')
+    parser.add_argument('-i', '--in', required=True)
+    parser.add_argument('-o', '--out')
+    parser.add_argument('-w', '--width', type=int, default=32)
+    parser.add_argument('-s', '--scale', type=int, default=0)
 
     args = parser.parse_args()
 
     # Нельзя одновременно и распаковать, и запаковать
     if args.archive and args.extract:
         raise Exception("You can't specify both -a and -e")
+
+    # Если длина кодового слова меньше 2 - то ошибка, так как слишком коротко
+    if args.width < 2:
+        print("Code word width is too small. Enter at least 2!")
+        exit(1)
+
+    # Большая длина кодового слова может привести к проблемам с точностью и производительностью
+    if args.width > 256:
+        print("Warning: high values of code word width may cause encode/decode accuracy and performance issues")
+
+    # Ширина вшивается в заголовок сжатого файла, потому нет смысла её указывать для распаковки
+    if args.width and args.extract:
+        print("Warning: width in extraction process is ignored")
+
+    if args.scale != 0:
+        print(f"Using frequency scale to {args.scale} bytes")
+    else:
+        print("No frequency scaling is used")
+
+    # Величина масштабирования частоты вшивается в заголовок сжатого файла, потому нет смысла её указывать для распаковки
+    if args.scale and args.extract:
+        print("Warning: frequency scaling in extraction process is ignored")
 
     if args.archive:
         # Открытие файла и кодирование
@@ -468,10 +486,14 @@ if __name__ == '__main__':
             out_file = in_file + '.ari2'
 
         with open(in_file, 'rb') as fin:
-            arico = Arico(fin, 64)
-            encoded = arico.encode()
+            arico = Arico(fin, args.width, args.scale)
+            try:
+                encoded = arico.encode()
+            # Если ошибка - аварийное завершение программы
+            except Exception as e:
+                print(e)
+                exit(2)
 
-            print(encoded)
             with open(out_file, 'wb+') as fout:
                 fout.write(bytes(encoded))
                 print(f"Archived data has been written to {out_file}")
@@ -486,8 +508,13 @@ if __name__ == '__main__':
             out_file = in_file[-4:]
 
         with open(in_file, 'rb') as fin:
-            arico = Arico(fin, 64 )
-            decoded = arico.decode()
+            arico = Arico(fin, args.width, args.scale)
+            try:
+                decoded = arico.decode()
+            # Если ошибка - аварийное завершение программы
+            except Exception as e:
+                print(e)
+                exit(2)
 
             with open(out_file, 'wb+') as f:
                 f.write(bytes(decoded))
