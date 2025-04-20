@@ -229,7 +229,7 @@ class Arico:
                 elder_low = low >> (self._width - 1)
                 elder_high = high >> (self._width - 1)
 
-                if elder_high == elder_low:  # При совпадении - запись совпадающего бита в выходной поток\
+                if elder_high == elder_low:  # При совпадении - запись совпадающего бита в выходной поток
                     self._write_digit(result, fills, elder_low)
                     written += 1
                     # Если имело место исчезновение порядка - выталкиваем инвертированный старший бит верхней границы в выходной поток столько раз, сколько было исчезновений
@@ -238,17 +238,16 @@ class Arico:
                         self._write_digit(result, fills, k)
                         written += 1
                         power_loss -= 1
-                else:
-                    # Иначе возможно исчезновение порядка
-                    # Если условия исчезновения выполняются - сдвигаем все разряды, кроме первого,
-                    # на 1 влево и дописываем в верхнюю границу максимальную цифру текущей системы счисления
-                    # Не забываем увеличить счётчик исчезновения порядка
-                    if low & (2 ** (self._width - 1)) == 2 ** self._width - 1 and high & (2 ** self._width - 1) == 0:
-                        low &= (2 ** self._width - 1) - (2 ** (self._width - 1)) - (2 ** (self._width - 2))
-                        high |= (2 ** self._width - 1)
-                        power_loss += 1
-                    else:  # Иначе никаких действий предпринимать не надо
-                        break
+                # Иначе возможно исчезновение порядка
+                # Если условия исчезновения выполняются - сдвигаем все разряды, кроме первого,
+                # на 1 влево и дописываем в верхнюю границу максимальную цифру текущей системы счисления
+                # Не забываем увеличить счётчик исчезновения порядка
+                elif low & (2 ** (self._width - 1)) == 2 ** self._width - 1 and high & (2 ** self._width - 1) == 0:
+                    low &= (2 ** self._width - 1) - (2 ** (self._width - 1)) - (2 ** (self._width - 2))
+                    high |= (2 ** self._width - 1)
+                    power_loss += 1
+                else:  # Иначе никаких действий предпринимать не надо
+                    break
 
                 # Смещение границ на 1
                 low <<= 1
@@ -269,7 +268,7 @@ class Arico:
             written += 1
             power_loss -= 1
 
-        if written % self._length == 0:
+        if written % self._width == 0:
             for _ in range(self._width):
                 self._write_digit(result, fills, 0)
         else:
