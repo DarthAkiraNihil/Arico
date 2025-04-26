@@ -20,6 +20,13 @@ class Arico:
         self._width = width  # Ширина кодового слова
         self._count_scale = count_scale  # Масштабирование частоты на некоторое количество байт. 0 - масштабирование не нужно
 
+        self._chunk_size = 65536
+
+    @staticmethod
+    def chunks(source, chunk_size):
+        for i in range(0, len(source), chunk_size):
+            yield source[i:i + chunk_size]
+
     # Вспомогательная функция преобразования числа в набор байт
     @staticmethod
     def _int_to_bytes(value: int, desired_length: int = None):
@@ -183,16 +190,25 @@ class Arico:
 
         # Считывание данных с файла и построение статистики
         while True:
-            data = self._file.read(1)
+            data = self._file.read(self._chunk_size)
             if not data:
                 break
-            byte = int.from_bytes(data, "big", signed=False)
-            if byte not in counts:
-                counts[byte] = 0
-            counts[byte] += 1
-            self._length += 1
-            self._data.append(byte)
+            # byte_data = list(map(lambda x: int.from_bytes(x, "big", signed=False), data))
+            for elem in data:
+                if elem not in counts:
+                    counts[elem] = 0
+                counts[elem] += 1
+                self._length += 1
+                self._data.append(elem)
+                # byte = int.from_bytes([elem], "big", signed=False)
+                # if byte not in counts:
+                #     counts[byte] = 0
+                # counts[byte] += 1
+                # self._length += 1
+                # self._data.append(byte)
 
+        print(len(self._data))
+        print(counts)
         # Сортировка словаря по ключам с масштабированием по ширине кодового слова
         scaling = 2 ** self._width
         counts = {ck: cv for ck, cv in sorted(counts.items(), key=lambda x: x[0])}
@@ -213,50 +229,57 @@ class Arico:
         power_loss = 0  # Количество бит исчезновения порядка
 
         written = 0
+        print("data readJJKHJK")
 
         # Кодирование
-        for idx, byte in enumerate(self._data):
 
-            # Пересчёт верхних и нижних границ в зависимости от текущего байта
-            rng = high - low + 1
-            high = low + rng * distribution[byte][1] // scale - 1
-            low = low + rng * distribution[byte][0] // scale
+        idx = 0
 
-            # Запись результата кодирования текущего байта
-            while True:
+        for cidx, chunk in enumerate(self.chunks(self._data, self._chunk_size)):
+            print("Processing chunk of size: {chunk} idx: {cidx}".format(chunk=len(chunk),cidx=cidx))
+            for byte in chunk:
+                #print("Processing byte: {byte}, cidx: {cidx}".format(byte=byte, cidx=cidx))
 
-                # Извлечение старших разрядов
-                elder_low = low >> (self._width - 1)
-                elder_high = high >> (self._width - 1)
+                # Пересчёт верхних и нижних границ в зависимости от текущего байта
+                rng = high - low + 1
+                high = low + rng * distribution[byte][1] // scale - 1
+                low = low + rng * distribution[byte][0] // scale
 
-                if elder_high == elder_low:  # При совпадении - запись совпадающего бита в выходной поток
-                    self._write_digit(result, fills, elder_low)
-                    written += 1
-                    # Если имело место исчезновение порядка - выталкиваем инвертированный старший бит верхней границы в выходной поток столько раз, сколько было исчезновений
-                    while power_loss != 0:
-                        k = ((high ^ (2 ** self._width - 1)) & (2 ** self._width))
-                        self._write_digit(result, fills, k)
+                # Запись результата кодирования текущего байта
+                while True:
+
+                    # Извлечение старших разрядов
+                    elder_low = low >> (self._width - 1)
+                    elder_high = high >> (self._width - 1)
+
+                    if elder_high == elder_low:  # При совпадении - запись совпадающего бита в выходной поток
+                        self._write_digit(result, fills, elder_low)
                         written += 1
-                        power_loss -= 1
-                # Иначе возможно исчезновение порядка
-                # Если условия исчезновения выполняются - сдвигаем все разряды, кроме первого,
-                # на 1 влево и дописываем в верхнюю границу максимальную цифру текущей системы счисления
-                # Не забываем увеличить счётчик исчезновения порядка
-                elif low & (2 ** (self._width - 1)) == 2 ** self._width - 1 and high & (2 ** self._width - 1) == 0:
-                    low &= (2 ** self._width - 1) - (2 ** (self._width - 1)) - (2 ** (self._width - 2))
-                    high |= (2 ** self._width - 1)
-                    power_loss += 1
-                else:  # Иначе никаких действий предпринимать не надо
-                    break
+                        # Если имело место исчезновение порядка - выталкиваем инвертированный старший бит верхней границы в выходной поток столько раз, сколько было исчезновений
+                        while power_loss != 0:
+                            k = ((high ^ (2 ** self._width - 1)) & (2 ** self._width))
+                            self._write_digit(result, fills, k)
+                            written += 1
+                            power_loss -= 1
+                    # Иначе возможно исчезновение порядка
+                    # Если условия исчезновения выполняются - сдвигаем все разряды, кроме первого,
+                    # на 1 влево и дописываем в верхнюю границу максимальную цифру текущей системы счисления
+                    # Не забываем увеличить счётчик исчезновения порядка
+                    elif low & (2 ** (self._width - 1)) == 2 ** self._width - 1 and high & (2 ** self._width - 1) == 0:
+                        low &= (2 ** self._width - 1) - (2 ** (self._width - 1)) - (2 ** (self._width - 2))
+                        high |= (2 ** self._width - 1)
+                        power_loss += 1
+                    else:  # Иначе никаких действий предпринимать не надо
+                        break
 
-                # Смещение границ на 1
-                low <<= 1
-                high <<= 1
-                high |= 1
+                    # Смещение границ на 1
+                    low <<= 1
+                    high <<= 1
+                    high |= 1
 
-                # Отсечение лишних разрядов
-                low &= (2 ** self._width - 1)
-                high &= (2 ** self._width - 1)
+                    # Отсечение лишних разрядов
+                    low &= (2 ** self._width - 1)
+                    high &= (2 ** self._width - 1)
 
         # Выталкивание оставшихся бит исчезновения порядка в выходной поток
         elder_low = low >> (self._width - 1)
