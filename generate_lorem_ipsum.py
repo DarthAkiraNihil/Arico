@@ -12,4 +12,3 @@ for size in sizes:
             paragraph += '\n'
             f.write(paragraph)
         print(f"generated for {size}")
-

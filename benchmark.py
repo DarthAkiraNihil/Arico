@@ -42,7 +42,7 @@ class AricoBenchmark:
 
                     compression_coefficient = (size_before - size_after) / size_before * 100.0
 
-                    print(f'benchmark: Results for {data['kind']}: size_before = {size_before}, size_after = {size_after}, compression_coefficient = {compression_coefficient}, exec_time = {delta}')
+                    print(f"benchmark: Results for {data['kind']}: size_before = {size_before}, size_after = {size_after}, compression_coefficient = {compression_coefficient}, exec_time = {delta}")
 
                     csv_writer.writerow([
                         generalized_type,
@@ -56,6 +56,7 @@ class AricoBenchmark:
 
         print(f"benchmark: Report is written to {self.report_file_name}")
         print(f"benchmark: Finished for {time.time() - benchmark_start}")
+
 
 if __name__ == '__main__':
     benchmark_source_data = {

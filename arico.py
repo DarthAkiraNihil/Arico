@@ -24,11 +24,7 @@ class Arico:
         self._chunk_size = 65536
 
         self._last = 0
-
-    @staticmethod
-    def chunks(source, chunk_size):
-        for i in range(0, len(source), chunk_size):
-            yield source[i:i + chunk_size]
+        self._chunk_buffer = list()
 
     # Вспомогательная функция преобразования числа в набор байт
     @staticmethod
@@ -100,14 +96,15 @@ class Arico:
     def _read_digit(self):
 
         # Если достигли конца файла - возвращаем -1 - невозможное значение, которое будет являться флагом конца файла
-        read = self._file.read(1)
-        if not read:
-            return -1
+        if not self._chunk_buffer:
+            self._chunk_buffer = self._file.read(self._chunk_size)
+            if not self._chunk_buffer:
+                return -1
 
         # Считываем 1 бит, т.к. основание системы счисления - 2
         length = 1
 
-        value = int.from_bytes(read, "big", signed=False)
+        value = self._chunk_buffer[0]
 
         # Если мы ещё не считали полный байт, то из считанного байта извлекаем нужный разряд,
         # перемещаем указатель в файле на 1 позицию назад, и возвращаем считанный разряд
@@ -115,8 +112,9 @@ class Arico:
             self._read_bits += length
             result = (value & ((2 ** length - 1) << (8 - self._read_bits))) >> (8 - self._read_bits)
             if self._read_bits < 8:
-                self._file.seek(-1, 1)
+                pass
             else:
+                self._chunk_buffer = self._chunk_buffer[1:]
                 self._read_bits = 0
             return result
 
@@ -127,17 +125,21 @@ class Arico:
         result = value & (2 ** remaining - 1)
 
         # Чтение следующего байта, откуда заимствуем разряды
-        read = self._file.read(1)
-        if not read:
-            taken_value = 0
+        if len(self._chunk_buffer) == 1:
+            self._chunk_buffer = self._file.read(self._chunk_size)
+            if not self._chunk_buffer:
+                taken_value = 0
+            else:
+                taken_value = self._chunk_buffer[0]
         else:
-            taken_value = int.from_bytes(read, "big", signed=False)
+            self._chunk_buffer = self._chunk_buffer[1:]
+            taken_value = self._chunk_buffer[0]
 
         # Из нового считанного байта извлекаем нужный разряд,
         # перемещаем указатель в файле на 1 позицию назад, и возвращаем считанный разряд
         result = (result << taken) + (((2 ** taken - 1) << (8 - taken)) & taken_value) >> (8 - taken)
 
-        self._file.seek(-1, 1)
+        # self._file.seek(-1, 1)
         self._read_bits = taken
 
         return result
@@ -200,22 +202,12 @@ class Arico:
                 break
             self._last = data[-1]
 
-            # byte_data = list(map(lambda x: int.from_bytes(x, "big", signed=False), data))
             for elem in data:
                 if elem not in counts:
                     counts[elem] = 0
                 counts[elem] += 1
                 self._length += 1
-                # self._data.append(elem)
-                # byte = int.from_bytes([elem], "big", signed=False)
-                # if byte not in counts:
-                #     counts[byte] = 0
-                # counts[byte] += 1
-                # self._length += 1
-                # self._data.append(byte)
 
-        #print(len(self._data))
-        #print(counts)
         # Сортировка словаря по ключам с масштабированием по ширине кодового слова
         scaling = 2 ** self._width
         counts = {ck: cv for ck, cv in sorted(counts.items(), key=lambda x: x[0])}
@@ -236,7 +228,6 @@ class Arico:
         power_loss = 0  # Количество бит исчезновения порядка
 
         written = 0
-        #print("data readJJKHJK")
 
         # Кодирование
 
@@ -246,9 +237,7 @@ class Arico:
         self._out.write(bytes(packed))
 
         while chunk := self._file.read(self._chunk_size):
-            #print("Processing chunk of size: {chunk} idx: {cidx}".format(chunk=len(chunk),cidx=cidx))
             for byte in chunk:
-                #print("Processing byte: {byte}, cidx: {cidx}".format(byte=byte, cidx=cidx))
 
                 # Пересчёт верхних и нижних границ в зависимости от текущего байта
                 rng = high - low + 1
@@ -464,8 +453,7 @@ class Arico:
             print("FAIL")
         self._out.seek(-1, 1)
         self._out.write(bytes([last]))
-        #decode_result[-1] = last
-        return# decode_result
+        return
 
 
 if __name__ == '__main__':  # noqa: C901
@@ -529,7 +517,6 @@ if __name__ == '__main__':  # noqa: C901
             except Exception as e:
                 print(e)
                 sys.exit(2)
-
 
     if args.extract:
         # Открытие файла и декодирование
