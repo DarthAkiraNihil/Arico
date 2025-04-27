@@ -207,8 +207,8 @@ class Arico:
                 # self._length += 1
                 # self._data.append(byte)
 
-        print(len(self._data))
-        print(counts)
+        #print(len(self._data))
+        #print(counts)
         # Сортировка словаря по ключам с масштабированием по ширине кодового слова
         scaling = 2 ** self._width
         counts = {ck: cv for ck, cv in sorted(counts.items(), key=lambda x: x[0])}
@@ -229,14 +229,14 @@ class Arico:
         power_loss = 0  # Количество бит исчезновения порядка
 
         written = 0
-        print("data readJJKHJK")
+        #print("data readJJKHJK")
 
         # Кодирование
 
         idx = 0
 
         for cidx, chunk in enumerate(self.chunks(self._data, self._chunk_size)):
-            print("Processing chunk of size: {chunk} idx: {cidx}".format(chunk=len(chunk),cidx=cidx))
+            #print("Processing chunk of size: {chunk} idx: {cidx}".format(chunk=len(chunk),cidx=cidx))
             for byte in chunk:
                 #print("Processing byte: {byte}, cidx: {cidx}".format(byte=byte, cidx=cidx))
 
