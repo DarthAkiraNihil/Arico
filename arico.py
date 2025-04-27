@@ -10,10 +10,11 @@ class AricoException(Exception):
 
 class Arico:
     # _digits = string.digits + string.ascii_letters
-    def __init__(self, file, width=32, count_scale=0):
+    def __init__(self, file, out, width=32, count_scale=0):
 
         self._file: BinaryIO = file
-        self._data: List[int] = list()
+        self._out: BinaryIO = out
+        # self._data: List[int] = list()
 
         self._length = 0  # Длина исходного потока
         self._read_bits = 0  # Количество прочитанных бит, вспомогательное поле
@@ -21,6 +22,8 @@ class Arico:
         self._count_scale = count_scale  # Масштабирование частоты на некоторое количество байт. 0 - масштабирование не нужно
 
         self._chunk_size = 65536
+
+        self._last = 0
 
     @staticmethod
     def chunks(source, chunk_size):
@@ -76,7 +79,7 @@ class Arico:
     # Вспомогательная функция записи цифры в выходной поток
     # Принимает на вход список-назначение, список заполненности байтов и саму цифру
     @staticmethod
-    def _write_digit(dst: List[int], fills: List[int], digit: int):
+    def _write_digit(dst: List[int], fills: List[int], digit: int, out: BinaryIO):
         offset = 1  # Величина сдвига. Может быть необходима, если основание кодового слова будет другим
 
         fill = fills[-1]
@@ -87,9 +90,11 @@ class Arico:
             fills[-1] += offset
         # Иначе излишки сдвигаем в новый разряд, и только затем записываем в конец
         else:
-            dst[-1] = (dst[-1] << (8 - fill)) + (digit >> (offset - 8 + fill))
-            dst.append(digit & (2 ** (offset - 8 + fill) - 1))
-            fills.append((offset - 8 + fill))
+            out.write(bytes([(dst[-1] << (8 - fill)) + (digit >> (offset - 8 + fill))]))
+            # dst[-1] = (dst[-1] << (8 - fill)) + (digit >> (offset - 8 + fill))
+            dst[-1] = (digit & (2 ** (offset - 8 + fill) - 1))
+            fills[-1] = (offset - 8 + fill)
+            # fills.append()
 
     # Вспомогательный метод чтения следующей цифры из входного потока
     def _read_digit(self):
@@ -138,7 +143,7 @@ class Arico:
         return result
 
     # Метод упаковки закодированного сообщения в итоговый набор байт с требуемой структурой
-    def _pack(self, encode_result, counts):
+    def _pack_header(self, counts):
         # Сигнатура
         signature = [0x41, 0x52, 0x49]  # ARI
 
@@ -149,7 +154,7 @@ class Arico:
 
         length = list(self._int_to_bytes(self._length))
         width = list(self._int_to_bytes(self._width))
-        last = self._data[-1]  # Записываем последний бит исходного потока для успешного декодирования
+        last = self._last  # Записываем последний бит исходного потока для успешного декодирования
 
         length_checkpoint = 0x2e
         # Упаковка словаря
@@ -182,7 +187,7 @@ class Arico:
             length_checkpoint,
             *counts_bytes,
             counts_checkpoint,
-            *encode_result
+            # *encode_result
         ]
 
     def encode(self):  # noqa: C901
@@ -193,13 +198,15 @@ class Arico:
             data = self._file.read(self._chunk_size)
             if not data:
                 break
+            self._last = data[-1]
+
             # byte_data = list(map(lambda x: int.from_bytes(x, "big", signed=False), data))
             for elem in data:
                 if elem not in counts:
                     counts[elem] = 0
                 counts[elem] += 1
                 self._length += 1
-                self._data.append(elem)
+                # self._data.append(elem)
                 # byte = int.from_bytes([elem], "big", signed=False)
                 # if byte not in counts:
                 #     counts[byte] = 0
@@ -213,7 +220,7 @@ class Arico:
         scaling = 2 ** self._width
         counts = {ck: cv for ck, cv in sorted(counts.items(), key=lambda x: x[0])}
         pure_counts = copy.deepcopy(counts)
-        counts = {ck: cv * scaling // len(self._data) for ck, cv in counts.items()}
+        counts = {ck: cv * scaling // self._length for ck, cv in counts.items()}
 
         # Построение распределения
         distribution, keys = self._build_distribution(counts)
@@ -233,9 +240,12 @@ class Arico:
 
         # Кодирование
 
-        idx = 0
+        self._file.seek(0)
 
-        for cidx, chunk in enumerate(self.chunks(self._data, self._chunk_size)):
+        packed = self._pack_header(pure_counts)
+        self._out.write(bytes(packed))
+
+        while chunk := self._file.read(self._chunk_size):
             #print("Processing chunk of size: {chunk} idx: {cidx}".format(chunk=len(chunk),cidx=cidx))
             for byte in chunk:
                 #print("Processing byte: {byte}, cidx: {cidx}".format(byte=byte, cidx=cidx))
@@ -253,12 +263,12 @@ class Arico:
                     elder_high = high >> (self._width - 1)
 
                     if elder_high == elder_low:  # При совпадении - запись совпадающего бита в выходной поток
-                        self._write_digit(result, fills, elder_low)
+                        self._write_digit(result, fills, elder_low, self._out)
                         written += 1
                         # Если имело место исчезновение порядка - выталкиваем инвертированный старший бит верхней границы в выходной поток столько раз, сколько было исчезновений
                         while power_loss != 0:
                             k = ((high ^ (2 ** self._width - 1)) & (2 ** self._width))
-                            self._write_digit(result, fills, k)
+                            self._write_digit(result, fills, k, self._out)
                             written += 1
                             power_loss -= 1
                     # Иначе возможно исчезновение порядка
@@ -283,28 +293,27 @@ class Arico:
 
         # Выталкивание оставшихся бит исчезновения порядка в выходной поток
         elder_low = low >> (self._width - 1)
-        self._write_digit(result, fills, elder_low)
+        self._write_digit(result, fills, elder_low, self._out)
         written += 1
         while power_loss != 0:
             k = ((low ^ (2 ** self._width - 1)) & (2 ** (self._width - 1))) >> 4
-            self._write_digit(result, fills, k)
+            self._write_digit(result, fills, k, self._out)
             written += 1
             power_loss -= 1
 
         if written % self._width == 0:
             for _ in range(self._width):
-                self._write_digit(result, fills, 0)
+                self._write_digit(result, fills, 0, self._out)
         else:
             while written % self._width != 0:
-                self._write_digit(result, fills, 0)
+                self._write_digit(result, fills, 0, self._out)
                 written += 1
             for _ in range(self._width):
-                self._write_digit(result, fills, 0)
+                self._write_digit(result, fills, 0, self._out)
 
         # Упаковка в байты
-        packed = self._pack(result, pure_counts)
 
-        return packed
+        return
 
     def decode(self):  # noqa: C901
         # Проверка сигнатуры и считывание длин
@@ -385,7 +394,7 @@ class Arico:
         distribution, keys = self._build_distribution(counts)
 
         scale = distribution[keys[-1]][1]
-        decode_result = list()
+        decode_result: int = 0
 
         # Установка нижней и верхней границы
         low, high = 0, scale + 1
@@ -403,12 +412,14 @@ class Arico:
 
             for k, v in distribution.items():
                 if v[0] <= value < v[1]:
-                    decode_result.append(k)
+                    decode_result = k
+                    self._out.write(bytes([k]))
+                    # decode_result.append(k)
                     break
 
             # Пересчёт границ
-            high = low + rng * distribution[decode_result[-1]][1] // scale - 1
-            low = low + rng * distribution[decode_result[-1]][0] // scale
+            high = low + rng * distribution[decode_result][1] // scale - 1
+            low = low + rng * distribution[decode_result][0] // scale
 
             # Классические тесты на исчезновение порядка и считывание следующей цифры
             while True:
@@ -451,8 +462,10 @@ class Arico:
             print("OK")
         else:
             print("FAIL")
-        decode_result[-1] = last
-        return decode_result
+        self._out.seek(-1, 1)
+        self._out.write(bytes([last]))
+        #decode_result[-1] = last
+        return# decode_result
 
 
 if __name__ == '__main__':  # noqa: C901
@@ -480,7 +493,7 @@ if __name__ == '__main__':  # noqa: C901
     # Если длина кодового слова меньше 2 - то ошибка, так как слишком коротко
     if args.width < 2:
         print("Code word width is too small. Enter at least 2!")
-        exit(1)
+        sys.exit(1)
 
     # Большая длина кодового слова может привести к проблемам с точностью и производительностью
     if args.width > 256:
@@ -506,19 +519,17 @@ if __name__ == '__main__':  # noqa: C901
         if not out_file:
             out_file = in_file + '.ari2'
 
-        with open(in_file, 'rb') as fin:
-            arico = Arico(fin, args.width, args.scale)
+        with open(in_file, 'rb') as fin, open(out_file, 'wb+') as fout:
+            arico = Arico(fin, fout, args.width, args.scale)
             try:
-                encoded = arico.encode()
+                arico.encode()
+                print(f"Archived data has been written to {out_file}")
+                sys.exit(0)
             # Если ошибка - аварийное завершение программы
             except Exception as e:
                 print(e)
-                exit(2)
+                sys.exit(2)
 
-            with open(out_file, 'wb+') as fout:
-                fout.write(bytes(encoded))
-                print(f"Archived data has been written to {out_file}")
-                exit(0)
 
     if args.extract:
         # Открытие файла и декодирование
@@ -528,15 +539,13 @@ if __name__ == '__main__':  # noqa: C901
         if not out_file:
             out_file = in_file[-4:]
 
-        with open(in_file, 'rb') as fin:
-            arico = Arico(fin, args.width, args.scale)
+        with open(in_file, 'rb') as fin, open(out_file, 'wb+') as f:
+            arico = Arico(fin, f, args.width, args.scale)
             try:
-                decoded = arico.decode()
+                arico.decode()
+                print(f"Extracted data has been written to {out_file}")
+                sys.exit(0)
             # Если ошибка - аварийное завершение программы
             except Exception as e:
                 print(e)
-                exit(2)
-
-            with open(out_file, 'wb+') as f:
-                f.write(bytes(decoded))
-                print(f"Extracted data has been written to {out_file}")
+                sys.exit(2)
