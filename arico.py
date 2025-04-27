@@ -10,7 +10,7 @@ class AricoException(Exception):
 
 class Arico:
     # _digits = string.digits + string.ascii_letters
-    def __init__(self, file, out, width=32, count_scale=0):
+    def __init__(self, file, out, width=32, count_scale=0, chunk_size=65536):
 
         self._file: BinaryIO = file
         self._out: BinaryIO = out
@@ -21,7 +21,7 @@ class Arico:
         self._width = width  # Ширина кодового слова
         self._count_scale = count_scale  # Масштабирование частоты на некоторое количество байт. 0 - масштабирование не нужно
 
-        self._chunk_size = 65536
+        self._chunk_size = chunk_size
 
         self._last = 0
         self._chunk_buffer = list()
@@ -461,8 +461,8 @@ if __name__ == '__main__':  # noqa: C901
     # Считывание аргументов командной строки
     parser = argparse.ArgumentParser(
         prog='arico',
-        description='Arico ariphmetical coder',
-        epilog='FAST PROTOTYPE'
+        description='Arico arithmetical coder and decoder',
+        epilog='By Akira Nihil'
     )
 
     parser.add_argument('-a', '--archive', action='store_true')
@@ -471,6 +471,7 @@ if __name__ == '__main__':  # noqa: C901
     parser.add_argument('-o', '--out')
     parser.add_argument('-w', '--width', type=int, default=32)
     parser.add_argument('-s', '--scale', type=int, default=0)
+    parser.add_argument('-c', '--chunk_size', type=int, default=65536)
 
     args = parser.parse_args()
 
@@ -482,6 +483,13 @@ if __name__ == '__main__':  # noqa: C901
     if args.width < 2:
         print("Code word width is too small. Enter at least 2!")
         sys.exit(1)
+
+    if args.chunk_size < 1:
+        print("Chunk size is too small. Enter at least 1!")
+        sys.exit(2)
+
+    if args.chunk_size > 4 * (1024 ** 2):
+        print("Warning: chunk size greater than 4MB may cause encode/decode performance issues and RAM running out")
 
     # Большая длина кодового слова может привести к проблемам с точностью и производительностью
     if args.width > 256:
@@ -516,7 +524,7 @@ if __name__ == '__main__':  # noqa: C901
             # Если ошибка - аварийное завершение программы
             except Exception as e:
                 print(e)
-                sys.exit(2)
+                sys.exit(255)
 
     if args.extract:
         # Открытие файла и декодирование
@@ -535,4 +543,4 @@ if __name__ == '__main__':  # noqa: C901
             # Если ошибка - аварийное завершение программы
             except Exception as e:
                 print(e)
-                sys.exit(2)
+                sys.exit(255)
