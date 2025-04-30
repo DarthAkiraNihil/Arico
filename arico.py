@@ -5,8 +5,28 @@ from typing import List, BinaryIO
 
 
 class AricoException(Exception):
-    pass
 
+    def __init__(self, msg: str, code: int) -> None:
+        super().__init__(msg)
+        self.code = code
+
+
+class InvalidSignatureException(AricoException):
+
+    def __init__(self) -> None:
+        super().__init__("Error: Invalid signature", 10)
+
+
+class InvalidLengthCheckpointByteException(AricoException):
+
+    def __init__(self, found: int) -> None:
+        super().__init__(f"Error: Invalid format length_checkpoint not found, found byte = {found}", 11)
+
+
+class InvalidCountsCheckpointByteException(AricoException):
+
+    def __init__(self, found: int) -> None:
+        super().__init__(f"Error: Invalid format counts_checkpoint not found, found byte = {found}", 12)
 
 class Arico:
     # _digits = string.digits + string.ascii_letters
@@ -313,7 +333,7 @@ class Arico:
         ])
 
         if not signature_ok:
-            raise AricoException("Error: Invalid signature")
+            raise InvalidSignatureException()
 
         # Считывание длин (в частности - длины исходного потока и ширины кодового слова), и последнего байта исходной последовательности
         length_of_length = self._next_byte(self._file)
@@ -337,7 +357,7 @@ class Arico:
         length_checkpoint = self._next_byte(self._file)
         # Должен дойти до контрольной точки
         if length_checkpoint != 0x2e:
-            raise AricoException(f"Error: Invalid format length_checkpoint not found, found byte = {length_checkpoint}")
+            raise InvalidLengthCheckpointByteException(length_checkpoint)
 
         # Считывание частот
         counts = dict()
@@ -355,7 +375,7 @@ class Arico:
         counts_checkpoint = self._next_byte(self._file)
         # Должен дойти до контрольной точки
         if counts_checkpoint != 0x2e:
-            raise AricoException(f"Error: Invalid format counts_checkpoint not found, found byte = {counts_checkpoint}")
+            raise InvalidCountsCheckpointByteException(counts_checkpoint)
 
         # Считывание закодированного числа и представление в виде кода
         code = 0
@@ -521,6 +541,9 @@ if __name__ == '__main__':  # noqa: C901
                 arico.encode()
                 print(f"Archived data has been written to {out_file}")
                 sys.exit(0)
+            except AricoException as e:
+                print(e)
+                sys.exit(e.code)
             # Если ошибка - аварийное завершение программы
             except Exception as e:
                 print(e)
@@ -540,6 +563,9 @@ if __name__ == '__main__':  # noqa: C901
                 arico.decode()
                 print(f"Extracted data has been written to {out_file}")
                 sys.exit(0)
+            except AricoException as e:
+                print(e)
+                sys.exit(e.code)
             # Если ошибка - аварийное завершение программы
             except Exception as e:
                 print(e)
