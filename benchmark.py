@@ -1,14 +1,14 @@
 import csv
 import os
 import time
-from typing import List
 
 
+# Класс для проведения бенчмарка
 class AricoBenchmark:
     def __init__(self, report_file_name: str, benchmark_source_data: dict):
-        self.report_file_name = report_file_name
-        self.source_data = benchmark_source_data
-        self.header = [
+        self.report_file_name = report_file_name  # название файла отчёта
+        self.source_data = benchmark_source_data  # данные для бенчмарка
+        self.header = [  # данные заголовка таблицы результатов
             'generalized_type',
             'file_kind',
             'file_name',
@@ -21,10 +21,12 @@ class AricoBenchmark:
     def run(self):
         benchmark_start = time.time()
         print(f"benchmark: Arico Benchmark Started. time = {benchmark_start}")
-        with open("benchmark_report.csv", "w+", newline='', encoding='utf8') as report_file:
+        # открытие файла отчёта
+        with open(self.report_file_name, "w+", newline='', encoding='utf8') as report_file:
             csv_writer = csv.writer(report_file)
             csv_writer.writerow(self.header)
 
+            # для всех файлов
             for generalized_type in self.source_data.keys():
                 print(f"[ ===== Processing files of type {generalized_type} ===== ]")
                 for data in self.source_data[generalized_type]:
@@ -34,9 +36,11 @@ class AricoBenchmark:
                     input_file = data['file_name']
                     output_file = input_file + '.ari'
 
+                    # вызов кодера в дочернем процессе
                     os.system(f"python arico.py -a -i \"{input_file}\" -o \"{output_file}\" -w {data['width']}")
                     delta = time.time() - start
 
+                    # вычисление коэффициента сжатия
                     size_before = os.path.getsize(input_file)
                     size_after = os.path.getsize(output_file)
 
@@ -44,6 +48,7 @@ class AricoBenchmark:
 
                     print(f"benchmark: Results for {data['kind']}: size_before = {size_before}, size_after = {size_after}, compression_coefficient = {compression_coefficient}, exec_time = {delta}")
 
+                    # запись в отчёт
                     csv_writer.writerow([
                         generalized_type,
                         data['kind'],
@@ -59,6 +64,7 @@ class AricoBenchmark:
 
 
 if __name__ == '__main__':
+    # описание данных для бенчмарка
     benchmark_source_data = {
         'text_lorem_ipsum': [
             {
@@ -177,7 +183,7 @@ if __name__ == '__main__':
             },
             {
                 'kind': 'PNG Image: Variant 2 (complex 1)',
-                'file_name': 'benchmark_data/image_png/chr0me.png',
+                'file_name': 'benchmark_data/image_png/captain_chr0me_clean.png',
                 'width': 32,
             },
             {
@@ -236,7 +242,7 @@ if __name__ == '__main__':
             },
             {
                 'kind': 'MP4 Video: Variant 5 (YouTube Movie)',
-                'file_name': 'benchmark_data/video_mp4/stupid_meme.mp4',
+                'file_name': 'benchmark_data/video_mp4/DeathStranding.mp4',
                 'width': 256,
             },
             {
@@ -332,4 +338,5 @@ if __name__ == '__main__':
         ],
     }
 
-    AricoBenchmark('/benchmark_report.csv', benchmark_source_data).run()
+    # запуск бенчмарка
+    AricoBenchmark('benchmark_report.csv', benchmark_source_data).run()
